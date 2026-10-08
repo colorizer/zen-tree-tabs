@@ -225,3 +225,22 @@ console.log("--- restart safety ---");
   store.set(L2, { "ztt-id": "late-2", "ztt-parent": "late-1" });
   L.AfterWorkspacesSessionRestore({}); show("after Zen's spaces-restored event:");
 }
+console.log("--- inactive spaces (Zen 1.22: gBrowser.tabs = active space only) ---");
+{
+  tabs.length = 0; groups.length = 0;
+  const mkIn = (name, space) => { const t = new Tab(name); t.a["zen-workspace-id"] = space; return t; };
+  const a1 = mkIn("a1", "s1"), a2 = mkIn("a2", "s1"), b1 = mkIn("b1", "s2"), b2 = mkIn("b2", "s2"), b3 = mkIn("b3", "s2");
+  store.set(a1, { "ztt-id": "a1" }); store.set(a2, { "ztt-id": "a2", "ztt-parent": "a1" });
+  store.set(b1, { "ztt-id": "b1" }); store.set(b2, { "ztt-id": "b2", "ztt-parent": "b1" }); store.set(b3, { "ztt-id": "b3", "ztt-parent": "b2" });
+  const spaceEls = [
+    { pinnedTabsContainer: { children: [] }, tabsContainer: { children: [a1, a2] } },
+    { pinnedTabsContainer: { children: [] }, tabsContainer: { children: [b1, b2, b3] } },
+  ];
+  tabs.push(a1, a2);                                  // only the active space is in gBrowser.tabs
+  const realQSA = document.querySelectorAll;
+  document.querySelectorAll = sel => (sel === "zen-workspace" ? spaceEls : realQSA(sel));
+  L.AfterWorkspacesSessionRestore({});
+  const d = t => R.get(t)?.depth ?? 0;
+  console.log(`active s1: a1(${d(a1)}) a2(${d(a2)})   inactive s2: b1(${d(b1)}) b2(${d(b2)}) b3(${d(b3)})`);
+  document.querySelectorAll = realQSA;
+}

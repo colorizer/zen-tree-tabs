@@ -144,8 +144,33 @@
   const nodeOf = tab => splitOf(tab) ?? tab;
   const tabsOf = node => (isSplit(node) ? node.tabs : [node]);
   const leadTab = node => tabsOf(node)[0];
-  const firstIndex = node => gBrowser.tabs.indexOf(leadTab(node));
-  const lastIndex = node => gBrowser.tabs.indexOf(tabsOf(node).at(-1));
+  // Every tab of every space. gBrowser.tabs only has the *active* space's
+  // tabs (Zen keeps the others in their own space containers), but the tree
+  // lives in all spaces. Within a container this is DOM (= tab) order.
+  function allTabs() {
+    const spaces = document.querySelectorAll("zen-workspace");
+    if (!spaces.length) {
+      return gBrowser.tabs;
+    }
+    const tabs = [];
+    const collect = container => {
+      for (const el of container?.children ?? []) {
+        if (gBrowser.isTab(el)) {
+          tabs.push(el);
+        } else if (gBrowser.isTabGroup(el)) {
+          tabs.push(...el.tabs);
+        }
+      }
+    };
+    for (const space of spaces) {
+      collect(space.pinnedTabsContainer);
+      collect(space.tabsContainer);
+    }
+    return tabs;
+  }
+
+  const firstIndex = node => allTabs().indexOf(leadTab(node));
+  const lastIndex = node => allTabs().indexOf(tabsOf(node).at(-1));
 
   // Pinned and normal tabs take part (each section of a space is its own
   // tree): plain tabs, or splits that aren't inside a Zen folder. Folders and
@@ -175,7 +200,7 @@
   // Tree nodes in tab order (optionally one section, minus some).
   function treeNodes(section = null, exclude = new Set()) {
     const nodes = [];
-    for (const tab of gBrowser.tabs) {
+    for (const tab of allTabs()) {
       if (!isTreeTab(tab)) {
         continue;
       }
@@ -192,7 +217,7 @@
 
   // id -> node, for every tab id.
   function idMap() {
-    return new Map(gBrowser.tabs.map(t => [t.getAttribute(ATTR_ID), nodeOf(t)]));
+    return new Map(allTabs().map(t => [t.getAttribute(ATTR_ID), nodeOf(t)]));
   }
 
   // A node's parent id: the first one among its tabs that isn't the node
@@ -325,7 +350,7 @@
       }
       stack.push(node);
     }
-    for (const tab of gBrowser.tabs) {
+    for (const tab of allTabs()) {
       if (!treeTabs.has(tab)) {
         clearRender(tab);
       }
@@ -920,7 +945,7 @@
       setState(tab, ATTR_PARENT, parentId);
       const subtree = descendantsOf(baseNode).filter(n => n !== tab);
       const anchor = subtree.at(-1) ?? baseNode;
-      if (gBrowser.tabs.indexOf(tab) !== lastIndex(anchor) + 1) {
+      if (allTabs().indexOf(tab) !== lastIndex(anchor) + 1) {
         moveOurselves(() => gBrowser.moveTabAfter(tab, anchor));
       }
       if (mode === "child" && isCollapsed(baseNode) && tab.selected) {
@@ -1029,7 +1054,7 @@
 
   // Re-read saved values. Safe at any time: every change made through the
   // mod is saved right away, so saved values match what we have.
-  function reclaim(tabs = gBrowser.tabs, why = "") {
+  function reclaim(tabs = allTabs(), why = "") {
     if (!ready) {
       return;
     }
@@ -1047,7 +1072,7 @@
       return "";
     }
     const stats = {};
-    for (const tab of gBrowser.tabs) {
+    for (const tab of allTabs()) {
       if (!isTreeTab(tab)) {
         continue;
       }
@@ -1062,7 +1087,7 @@
   }
 
   // A whole window's session was (re)applied, possibly onto existing tabs.
-  const on_SSWindowRestored = () => reclaim(gBrowser.tabs, "window restored");
+  const on_SSWindowRestored = () => reclaim(allTabs(), "window restored");
 
   // Zen sets up the spaces' tabs in its own step after the session restore
   // (AfterWorkspacesSessionRestore), and switching spaces can bring tabs in
@@ -1072,7 +1097,7 @@
     const space = gZenWorkspaces.activeWorkspace;
     if (ready && space && space !== shownSpace) {
       shownSpace = space;
-      reclaim(gBrowser.tabs.filter(t => spaceOf(t) === space), "space shown");
+      reclaim(allTabs().filter(t => spaceOf(t) === space), "space shown");
     }
   }
 
@@ -1092,7 +1117,7 @@
   }
   listen(window, "ZenWorkspacesUIUpdate", scheduleRender);
   listen(window, "SSWindowRestored", on_SSWindowRestored);
-  listen(window, "AfterWorkspacesSessionRestore", () => reclaim(gBrowser.tabs, "spaces restored"));
+  listen(window, "AfterWorkspacesSessionRestore", () => reclaim(allTabs(), "spaces restored"));
   listen(window, "ZenWorkspacesUIUpdate", on_SpaceMaybeChanged);
   for (const type of ["mousedown", "keydown", "command", "drop", "contextmenu"]) {
     listen(window, type, event => {
@@ -1210,7 +1235,7 @@
   if (signal.aborted) {
     return;
   }
-  for (const tab of gBrowser.tabs) {
+  for (const tab of allTabs()) {
     claim(tab, { force: true });
   }
   ready = true;
@@ -1219,7 +1244,7 @@
   log("startup", treeStats());
   // Catch anything Zen settles late (spaces, sync).
   for (const delay of [1000, 5000]) {
-    setTimeout(() => !signal.aborted && reclaim(gBrowser.tabs, `startup +${delay}ms`), delay);
+    setTimeout(() => !signal.aborted && reclaim(allTabs(), `startup +${delay}ms`), delay);
   }
 
   // Always printed, so it's obvious which version of the file is running.

@@ -65,6 +65,7 @@ Checked against Zen 1.22.3b (Firefox 156). If something breaks after an update, 
 | Internal | Used for |
 |---|---|
 | `gZenWorkspaces.promiseInitialized`, `.activeWorkspace`, `.activeWorkspaceElement` (`.tabsContainer`, `.pinnedTabsContainer`, `.indicator`) | waiting for Zen, drop areas, space header highlight |
+| `zen-workspace` elements' `.pinnedTabsContainer` / `.tabsContainer` children | `allTabs()`: every space's tabs. **`gBrowser.tabs` only holds the active space's tabs** in Zen 1.22, so it can't be used for the tree |
 | `zen-workspace-id`, `zen-essential`, `zen-glance-tab`, `zen-empty-tab` tab attributes | sections and exclusions |
 | `--zen-folder-indent` + Zen's `margin-inline-start` rule | indentation |
 | `tab-group[split-view-group]`, `group.tabs` | split nodes |
