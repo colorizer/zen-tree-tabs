@@ -215,3 +215,13 @@ console.log("--- restart safety ---");
   await null; await null; globalThis.queueMicrotask = f => f();
   show(`undo-close X (saved under A2, while on C3), id=${X.getAttribute("ztt-id")}:`);
 }
+{
+  // Saved values that only become readable after startup (Zen settling a
+  // space late): the tab nests once Zen reports its spaces restored.
+  tabs.length = 0; groups.length = 0;
+  const L1 = new Tab("L1"); const L2 = new Tab("L2"); tabs.push(L1, L2);
+  store.set(L1, { "ztt-id": "late-1" });
+  L.AfterWorkspacesSessionRestore({}); show("before saved values arrive:");
+  store.set(L2, { "ztt-id": "late-2", "ztt-parent": "late-1" });
+  L.AfterWorkspacesSessionRestore({}); show("after Zen's spaces-restored event:");
+}
