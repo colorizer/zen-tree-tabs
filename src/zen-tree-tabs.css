@@ -1,0 +1,170 @@
+/* Zen Tree Tabs — loaded by zen-tree-tabs.uc.js (reloads with Ctrl+Alt+Shift+R). */
+
+:root {
+  --ztt-indent: 14px; /* Overwritten from INDENT_PX in the script. */
+  --ztt-guide-width: 2px;
+  --ztt-guide-color: light-dark(rgba(0, 0, 0, 0.14), rgba(255, 255, 255, 0.13));
+  --ztt-accent: var(--zen-primary-color);
+}
+
+/* Nodes are tabs or whole split views (Zen's split-view tab group). */
+:is(.tabbrowser-tab, tab-group[split-view-group])[ztt-hidden] {
+  display: none !important;
+}
+
+/* ── Indent guides ────────────────────────────────────────────────────── */
+/* One line per ancestor level, centred in that level's indent column.
+   They live in the indent margin to the left of the tab, so consecutive tabs
+   of a subtree join into continuous lines. */
+
+:root[zen-sidebar-expanded="true"] :is(.tabbrowser-tab, tab-group[split-view-group])[ztt-nested] {
+  position: relative;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    inset-inline-start: calc(-1 * var(--ztt-depth) * var(--ztt-indent));
+    width: calc(var(--ztt-depth) * var(--ztt-indent));
+    background: repeating-linear-gradient(
+      to right,
+      transparent 0 calc((var(--ztt-indent) - var(--ztt-guide-width)) / 2),
+      var(--ztt-guide-color) 0 calc((var(--ztt-indent) + var(--ztt-guide-width)) / 2),
+      transparent 0 var(--ztt-indent)
+    );
+    pointer-events: none;
+  }
+}
+
+/* ── Collapse twisty & hidden-count badge ─────────────────────────────── */
+/* Both sit on top of the favicon, so they take no horizontal space. */
+
+.tabbrowser-tab .ztt-twisty,
+.tabbrowser-tab .ztt-count {
+  display: none;
+}
+
+:root[zen-sidebar-expanded="true"] .tabbrowser-tab[ztt-has-children] {
+  /* Hovering a parent swaps its favicon for the chevron. */
+  &:hover {
+    & .ztt-twisty {
+      display: flex;
+    }
+    & :is(.tab-icon-image, .tab-icon-pending, .tab-throbber, .tab-icon-overlay) {
+      opacity: 0 !important;
+    }
+  }
+
+  & .ztt-twisty {
+    width: 16px;
+    height: 16px;
+    padding: 2px;
+    box-sizing: border-box;
+    list-style-image: url("chrome://browser/skin/zen-icons/arrow-down.svg");
+    -moz-context-properties: fill, fill-opacity;
+    fill: currentColor;
+    fill-opacity: 0.85;
+    border-radius: 4px;
+    transition: rotate 0.15s ease;
+    cursor: default;
+
+    &:hover {
+      fill-opacity: 1;
+      background-color: color-mix(in srgb, currentColor 15%, transparent);
+    }
+  }
+
+  &[ztt-collapsed] {
+    & .ztt-twisty {
+      rotate: -90deg;
+    }
+
+    /* Collapsed: keep the favicon, add a count of hidden tabs. */
+    & .ztt-count:not([value=""]) {
+      display: flex;
+      align-self: end;
+      justify-self: end;
+      translate: 45% 35%;
+      min-width: 12px;
+      height: 12px;
+      margin: 0;
+      padding: 0 3px;
+      box-sizing: border-box;
+      align-items: center;
+      justify-content: center;
+      border-radius: 6px;
+      font-size: 8px;
+      font-weight: 700;
+      line-height: 1;
+      color: white;
+      background: color-mix(in srgb, var(--ztt-accent) 85%, black);
+      pointer-events: none;
+    }
+    &:hover .ztt-count {
+      display: none;
+    }
+  }
+}
+
+/* ── Drag preview ─────────────────────────────────────────────────────── */
+
+/* Our drop line replaces Zen's while a tree slot is active. It starts at
+   the level the tab will land at, with the same look as Zen's line. */
+:root[ztt-tree-drop] #zen-drag-indicator {
+  display: none !important;
+}
+
+#ztt-drop-line {
+  --ztt-line-height: 2px;
+  --ztt-line-bg: color-mix(in srgb, var(--ztt-accent) 50%, light-dark(rgba(0, 0, 0, 0.85), rgba(255, 255, 255, 0.95)) 50%);
+
+  position: fixed;
+  z-index: 1000;
+  height: var(--ztt-line-height);
+  border-radius: 5px;
+  background: var(--ztt-line-bg);
+  pointer-events: none;
+  transition: left 0.06s ease-out, width 0.06s ease-out;
+
+  /* The ring at the start marks the level, like Zen's indicator. */
+  &::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: calc(-3 * var(--ztt-line-height));
+    width: calc(2 * var(--ztt-line-height));
+    height: calc(2 * var(--ztt-line-height));
+    border: var(--ztt-line-height) solid var(--ztt-line-bg);
+    border-radius: 50%;
+    translate: 0 -50%;
+  }
+}
+
+/* A top-level drop has no parent tab, so the space's header lights up. */
+.zen-current-workspace-indicator[ztt-drop-parent] {
+  outline: 1.5px solid color-mix(in srgb, var(--ztt-accent) 75%, transparent);
+  outline-offset: -1.5px;
+  background-color: color-mix(in srgb, var(--ztt-accent) 18%, transparent) !important;
+  border-radius: var(--border-radius-medium, 8px);
+}
+
+/* A split view that will become the parent: outline the whole row. */
+tab-group[split-view-group][ztt-drop-parent] > .tab-group-container {
+  outline: 1.5px solid color-mix(in srgb, var(--ztt-accent) 75%, transparent) !important;
+  outline-offset: -1.5px !important;
+  background-color: color-mix(in srgb, var(--ztt-accent) 18%, transparent) !important;
+}
+
+/* The tab that will become the parent. Unloaded tabs are often faded or
+   desaturated by themes (e.g. "Ghost Tabs"), so bring them back while
+   they're the target, otherwise the highlight turns grey and vanishes. */
+.tabbrowser-tab[ztt-drop-parent] {
+  filter: none !important;
+  opacity: 1 !important;
+
+  & .tab-background {
+    outline: 1.5px solid color-mix(in srgb, var(--ztt-accent) 75%, transparent);
+    outline-offset: -1.5px;
+    background-color: color-mix(in srgb, var(--ztt-accent) 18%, transparent) !important;
+  }
+}
