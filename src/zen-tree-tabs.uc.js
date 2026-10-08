@@ -64,7 +64,38 @@
 
   // ── State helpers ──────────────────────────────────────────────────────
 
+  // A tab's saved values (SessionStore) are the truth until we've read them
+  // onto the tab ("claimed" it); only then do our attributes get written back.
+  // Restored tabs get their saved values from Firefox *after* they're created
+  // (and TabOpen has fired), so writing earlier would overwrite the real tree
+  // with fresh ids and no parents.
+  const claimed = new WeakSet();
+
+  function savedValue(tab, attr) {
+    try {
+      return SessionStore.getCustomTabValue(tab, attr) ?? "";
+    } catch (e) {
+      return "";
+    }
+  }
+
+  // Read saved values onto the tab (saved wins), then own it.
+  function claim(tab, { force = false } = {}) {
+    if (claimed.has(tab) && !force) {
+      return;
+    }
+    for (const attr of PERSISTED) {
+      const value = savedValue(tab, attr);
+      if (value) {
+        tab.setAttribute(attr, value);
+      }
+    }
+    claimed.add(tab);
+    ensureId(tab);
+  }
+
   function setState(tab, attr, value) {
+    claim(tab); // Never let a write happen before the saved values are in.
     if (value) {
       tab.setAttribute(attr, value);
     } else {
@@ -74,6 +105,9 @@
   }
 
   function persist(tab, attr) {
+    if (!claimed.has(tab)) {
+      return;
+    }
     const value = tab.getAttribute(attr) ?? "";
     try {
       if ((SessionStore.getCustomTabValue(tab, attr) ?? "") === value) {
@@ -89,24 +123,10 @@
     }
   }
 
-  // Pull saved values onto the tab, but never wipe what the tab already has:
-  // a missing SessionStore value means "lost", not "cleared".
-  function hydrate(tab) {
-    for (const attr of PERSISTED) {
-      let value = "";
-      try {
-        value = SessionStore.getCustomTabValue(tab, attr) ?? "";
-      } catch (e) {}
-      if (value) {
-        tab.setAttribute(attr, value);
-      }
-    }
-    ensureId(tab);
-  }
-
   function ensureId(tab) {
     if (!tab.hasAttribute(ATTR_ID)) {
-      setState(tab, ATTR_ID, Services.uuid.generateUUID().toString().slice(1, -1));
+      tab.setAttribute(ATTR_ID, Services.uuid.generateUUID().toString().slice(1, -1));
+      persist(tab, ATTR_ID);
     }
     return tab.getAttribute(ATTR_ID);
   }
@@ -253,12 +273,15 @@
   const hiddenCounts = new Map(); // collapsed node -> hidden descendants (per render)
 
   function render() {
+    if (!ready) {
+      return; // Nothing is claimed before the session restore is done.
+    }
     const stacks = new Map(); // section -> ancestor stack
     const treeTabs = new Set();
     for (const node of treeNodes()) {
       for (const tab of tabsOf(node)) {
         treeTabs.add(tab);
-        ensureId(tab);
+        claim(tab);
       }
       syncNodeState(node);
       const section = sectionOf(node);
@@ -543,7 +566,16 @@
 
   let drag = null; // State of the current tree-tab drag, if any.
   let pendingDrop = false;
-  let ready = false; // Repairs need a first render to reason about.
+  // Set once the session is restored and the first render is done. Before
+  // that, tab events come from Zen/Firefox rebuilding the session, not from
+  // you, and must not rewrite the tree.
+  let ready = false;
+
+  // Moves, pins and folder changes only rewrite the tree when they follow
+  // your own input (click, key, menu, drop); Zen also moves/pins tabs on its
+  // own (startup, sync, space changes), and those must leave the tree alone.
+  let lastInput = 0;
+  const byUser = () => ready && Date.now() - lastInput < 1500;
 
   const TAB_DROP_TYPE = "application/x-moz-tabbrowser-tab";
 
@@ -848,7 +880,9 @@
 
   function on_TabOpen(event) {
     const tab = event.target;
-    ensureId(tab);
+    if (!ready) {
+      return; // Session restore: the tab's saved values are its tree state.
+    }
     // Links (and window.open) have an opener: the new tab is its last child.
     // Otherwise, place it relative to the active tab per newTabPosition().
     let base = tab.openerTab;
@@ -868,16 +902,22 @@
     // A tab opened from inside a split relates to the whole split.
     const baseNode = nodeOf(base);
     const parentId = mode === "child" ? ensureId(base) : parentIdOf(baseNode);
-    setState(tab, ATTR_PARENT, parentId);
     // Either way it goes right after the base's whole subtree: as its last
     // child, or as the next sibling (directly below the base would cut the
     // base off from its own children). Deferred so Zen's own TabOpen handling
-    // (space assignment) and a session restore of this tab ("undo close tab")
-    // get to run first.
+    // (space assignment) and a session restore of this tab ("undo close tab",
+    // which hands it its saved values right after creating it) run first.
     queueMicrotask(() => {
-      if (restoring.has(tab) || !isTreeTab(tab) || !isTreeTab(base) || splitOf(tab)) {
+      if (savedValue(tab, ATTR_ID)) {
+        claim(tab); // A restored tab: its saved place wins over our guess.
+        scheduleRender();
         return;
       }
+      if (restoring.has(tab) || !isTreeTab(tab) || !isTreeTab(base) || splitOf(tab)) {
+        scheduleRender();
+        return;
+      }
+      setState(tab, ATTR_PARENT, parentId);
       const subtree = descendantsOf(baseNode).filter(n => n !== tab);
       const anchor = subtree.at(-1) ?? baseNode;
       if (gBrowser.tabs.indexOf(tab) !== lastIndex(anchor) + 1) {
@@ -891,19 +931,24 @@
   }
 
   function on_TabClose(event) {
-    onTabLeaving(event.target);
+    if (ready) {
+      onTabLeaving(event.target);
+    }
     scheduleRender();
   }
 
   function on_TabMove(event) {
     const tab = event.target;
-    if (ready && !selfMoving && !drag && !pendingDrop && isTreeTab(tab)) {
+    if (byUser() && !selfMoving && !drag && !pendingDrop && isTreeTab(tab)) {
       repair(nodeOf(tab));
     }
     scheduleRender();
   }
 
   function on_TabSelect(event) {
+    if (!ready) {
+      return;
+    }
     // Selecting a hidden tab (Ctrl+Tab, search, a link) expands its ancestors.
     const ids = idMap();
     const seen = new Set();
@@ -926,7 +971,7 @@
   // where they are (moved up a level). Joining a split keeps its position.
   function on_TabGrouped(event) {
     const tab = event.target;
-    if (tab.group && !isSplit(tab.group)) {
+    if (byUser() && tab.group && !isSplit(tab.group)) {
       onTabLeaving(tab);
       setState(tab, ATTR_PARENT, null);
     }
@@ -940,7 +985,7 @@
   const sectionMoves = new WeakSet(); // Nodes already handled this round.
   function on_TabPinChanged(event) {
     scheduleRender();
-    if (selfMoving || drag || pendingDrop || !ready) {
+    if (selfMoving || drag || pendingDrop || !byUser()) {
       return;
     }
     const tab = event.target;
@@ -969,14 +1014,24 @@
     }, 0);
   }
 
+  // A tab's content restored ("undo close tab", or an unloaded tab loading):
+  // its saved values win. Never deletes saved values.
   function on_SSTabRestoring(event) {
     const tab = event.target;
     restoring.add(tab);
-    if (implicitChildren.has(tab)) {
-      // A restored tab isn't a "new tab": drop the guessed parent.
-      setState(tab, ATTR_PARENT, null);
+    if (implicitChildren.has(tab) && !savedValue(tab, ATTR_PARENT)) {
+      tab.removeAttribute(ATTR_PARENT); // A guess for a "new tab" it isn't.
     }
-    hydrate(tab);
+    claim(tab, { force: true });
+    scheduleRender();
+  }
+
+  // A whole window's session was (re)applied, possibly onto existing tabs:
+  // take every tab's saved values again.
+  function on_SSWindowRestored() {
+    for (const tab of gBrowser.tabs) {
+      claim(tab, { force: true });
+    }
     scheduleRender();
   }
 
@@ -995,6 +1050,14 @@
     listen(gBrowser.tabContainer, type, handler);
   }
   listen(window, "ZenWorkspacesUIUpdate", scheduleRender);
+  listen(window, "SSWindowRestored", on_SSWindowRestored);
+  for (const type of ["mousedown", "keydown", "command", "drop", "contextmenu"]) {
+    listen(window, type, event => {
+      if (event.isTrusted) {
+        lastInput = Date.now();
+      }
+    }, true);
+  }
   // Capture on the window: tabs can be dropped onto space containers, the
   // empty area below the tabs, etc., not only onto the tab strip.
   listen(window, "dragstart", on_dragstart, true);
@@ -1084,18 +1147,31 @@
     }
   }
 
-  window.ZenTreeTabs = { destroy, reload, render, toggleCollapsed, childrenOf, rendered };
+  // Console/recovery helper: make `parentTab` the parent of `tab`'s node
+  // (null = top level).
+  function setParent(tab, parentTab) {
+    setNodeState(nodeOf(tab), ATTR_PARENT, parentTab ? nodeId(nodeOf(parentTab)) : null);
+    scheduleRender();
+  }
+
+  window.ZenTreeTabs = { destroy, reload, render, toggleCollapsed, childrenOf, setParent, rendered };
 
   for (const old of gBrowser.tabContainer.querySelectorAll(".tab-content > .ztt-twisty")) {
     old.remove();
   }
   document.documentElement.style.setProperty("--ztt-indent", `${INDENT_PX}px`);
   await loadStyles();
-  for (const tab of gBrowser.tabs) {
-    hydrate(tab);
+  // Startup: the session's tabs (and their saved tree) arrive with the
+  // session restore, so only take over once it's done.
+  await SessionStore.promiseAllWindowsRestored;
+  if (signal.aborted) {
+    return;
   }
-  render();
+  for (const tab of gBrowser.tabs) {
+    claim(tab, { force: true });
+  }
   ready = true;
+  render();
 
   // Always printed, so it's obvious which version of the file is running.
   try {

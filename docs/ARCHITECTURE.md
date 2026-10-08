@@ -17,7 +17,8 @@ How Zen Tree Tabs works, and which Zen/Firefox internals it depends on. Read thi
   - `ztt-parent` — the parent's id (any tab id of the parent node),
   - `ztt-collapsed`.
   All tabs of a split carry the same parent/collapsed values (`syncNodeState`), and a child may point at either tab of a split, so a split keeps its children when one tab leaves.
-- **Attributes win over SessionStore.** SessionStore can lose values set on not-yet-restored tabs, so `hydrate()` never removes an attribute, and every render re-syncs attributes → SessionStore.
+- **Saved values win until a tab is claimed.** Firefox hands a restored tab its saved values *after* creating it (after `TabOpen`), and `SSTabRestoring` only fires once its content loads — never, for tabs that stay unloaded. So the mod treats SessionStore as the truth for any tab it hasn't `claim()`ed yet: claiming reads the saved values onto the tab first; only claimed tabs are ever written back. Nothing is claimed before `SessionStore.promiseAllWindowsRestored`, `SSWindowRestored` re-claims a window, and `TabOpen` decides "new vs restored" in a microtask (after Firefox applied any saved values). `SSTabRestoring` never deletes saved values.
+- **Only your actions rewrite the tree.** Move repairs, pin/unpin subtree moves and folder exits run only within 1.5 s of trusted user input (mouse, key, menu command, drop) and after startup; Zen moves/pins tabs on its own during restore, sync and space changes.
 - **Sections.** Each space has two independent trees: pinned tabs and normal tabs (`sectionOf()`). Tabs in Zen folders, Essentials, Glance and Zen's empty tab are not tree tabs (`isTreeTab()`).
 
 ## Rendering

@@ -26,13 +26,19 @@ class Split {
   toggleAttribute(k, on) { on ? (this.a[k] = "") : delete this.a[k]; }
 }
 const groups = [];
-const store = new Map(); let uid = 0; const L = {};
+const store = new Map(); let uid = 0;
+const handlers = {}; const on = (t, f) => (handlers[t] ??= []).push(f);
+const L = new Proxy({}, { get: (_, t) => ev => (handlers[t] ?? []).forEach(f => f({ type: t, isTrusted: true, ...ev })) });
+const userInput = () => L.mousedown({ target: { closest: () => null }, button: 0 });
+const realNow = Date.now; let clockShift = 0; Date.now = () => realNow() + clockShift;
+const lastInputReset = () => (clockShift += 10000);
+let restoreDone; const allRestored = new Promise(r => (restoreDone = r));
 const tabs = [];
 const indicator = { a: { orientation: "horizontal" }, style: { top: "", props: {}, setProperty(k, v) { this.props[k] = v; } },
   getAttribute(k) { return this.a[k] ?? null; }, setAttribute(k, v) { this.a[k] = String(v); }, removeAttribute(k) { delete this.a[k]; } };
 const g = globalThis;
 let fakeSplit = null; const container = { querySelectorAll: () => [] }; const pinnedBox = { querySelectorAll: () => [] }; const spaceEl = {}; const header = new (class { constructor() { this.a = {}; } getAttribute(k) { return this.a[k] ?? null; } setAttribute(k, v) { this.a[k] = v; } removeAttribute(k) { delete this.a[k]; } hasAttribute(k) { return k in this.a; } })();
-g.window = { addEventListener: (t, f) => (L[t] = f),
+g.window = { addEventListener: (t, f) => on(t, f),
   windowUtils: { getBoundsWithoutFlushing: el => {
     const pinRows = (() => { const r = []; for (const t of tabs) { const n = t.group ?? t; if (t.pinned && r.at(-1) !== n && !n.hasAttribute("ztt-hidden")) r.push(n); } return r.length; })();
     if (el === pinnedBox) return { top: 0, bottom: pinRows * H, left: 0, right: 250, height: pinRows * H };
@@ -46,7 +52,7 @@ g.gZenWorkspaces = g.window.gZenWorkspaces = { promiseInitialized: Promise.resol
 g.UC_API = { Windows: { waitWindowLoading: async () => {} } };
 g.Services = { prefs: { getStringPref: (n, d) => (n === "zen-tree-tabs.newtab-position" ? globalThis.NEWTAB ?? d : d), getBoolPref: (n, d) => d, prefHasUserValue: () => false, getDefaultBranch: () => ({ getBoolPref: n => defaults[n], setBoolPref: (n, v) => (defaults[n] = v) }) }, uuid: { generateUUID: () => `{u${++uid}}` }, dirsvc: { get: () => ({ append() {}, path: "/x" }) } };
 g.Ci = {}; g.IOUtils = { readUTF8: async () => "", stat: async () => ({ lastModified: 0 }) };
-g.ChromeUtils = { importESModule: () => ({ SessionStore: {
+g.ChromeUtils = { importESModule: () => ({ SessionStore: { promiseAllWindowsRestored: allRestored,
   getCustomTabValue: (t, k) => store.get(t)?.[k], setCustomTabValue: (t, k, v) => ((store.get(t) ?? store.set(t, {}).get(t))[k] = v),
   deleteCustomTabValue: (t, k) => delete store.get(t)?.[k] } }) };
 let line = null; const defaults = { "zen.splitView.enable-drag-over-split": true };
@@ -61,7 +67,7 @@ const move = (t, i) => { tabs.splice(tabs.indexOf(t), 1); tabs.splice(i, 0, t); 
 const elTabs = el => el.tabs ?? [el]; const lift = el => el.group ?? el;
 const place = (el, i) => { el = lift(el); const ts = elTabs(el); for (const t of ts) tabs.splice(tabs.indexOf(t), 1); tabs.splice(i(), 0, ...ts); for (const t of ts) L.TabMove({ target: t }); };
 g.gBrowser = { get tabs() { return tabs; }, get tabGroups() { return groups; }, isTab: el => el instanceof Tab, selectedTabs: [], selectedTab: null,
-  tabContainer: { addEventListener: (t, f) => (L[t] = f), querySelectorAll: () => tabs.filter(t => t.hasAttribute("ztt-drop-parent")) },
+  tabContainer: { addEventListener: (t, f) => on(t, f), querySelectorAll: () => tabs.filter(t => t.hasAttribute("ztt-drop-parent")) },
   pinTab: t => { if (t.pinned) return; t.pinned = true; const n = tabs.filter(x => x.pinned && x !== t).length; tabs.splice(tabs.indexOf(t), 1); tabs.splice(n, 0, t); L.TabPinned({ type: "TabPinned", target: t }); },
   unpinTab: t => { if (!t.pinned) return; t.pinned = false; tabs.splice(tabs.indexOf(t), 1); tabs.splice(tabs.filter(x => x.pinned).length, 0, t); L.TabUnpinned({ type: "TabUnpinned", target: t }); },
   moveTabAfter: (t, a) => place(t, () => tabs.indexOf(elTabs(lift(a)).at(-1)) + 1),
@@ -75,7 +81,8 @@ const show = label => { ZT.render(); const rows = []; for (const t of tabs) { co
 const open = (name, opener, at) => { const t = new Tab(name); tabs.splice(at ?? tabs.length, 0, t); t.openerTab = opener; L.TabOpen({ target: t }); return t; };
 
 tabs.push(new Tab("P"), new Tab("R"));
-eval(src); for (let i = 0; i < 30; i++) await null;
+eval(src); for (let i = 0; i < 10; i++) await null;
+restoreDone(); for (let i = 0; i < 30; i++) await null;
 const ZT = window.ZenTreeTabs; R = ZT.rendered;
 const P = named("P"); open("C1", P, 1); open("C2", P, 2); open("C1a", named("C1"), 2);
 show("setup:");
@@ -113,7 +120,7 @@ drag("R", 1, 0, 1, [], true); // drag started on title text: picked up from Fire
 // Ctrl+T with C2 selected: nests under C2.
 gBrowser.selectedTab = named("C2"); open("N", null); show("ctrl+t on C2:");
 // A foreign move (e.g. keyboard move) of a root tab into P's subtree -> adopts a valid parent.
-move(named("C1"), 1); show("foreign move C1 between P and R:");
+userInput(); move(named("C1"), 1); show("foreign move C1 between P and R:");
 // Close a parent: children up a level.
 const C2 = named("C2"); C2.closing = true; L.TabClose({ target: C2 }); tabs.splice(tabs.indexOf(C2), 1); show("close C2:");
 
@@ -152,8 +159,8 @@ const mk2 = (name, pinned, opener) => { const t = new Tab(name); t.pinned = pinn
 const p1 = mk2("p1", true); const p2 = mk2("p2", true, p1); p2.setAttribute("ztt-parent", p1.getAttribute("ztt-id"));
 const n1 = mk2("n1", false); const n1a = mk2("n1a", false, n1); const n1b = mk2("n1b", false, n1a); const m = mk2("m", false);
 showS("setup:");
-gBrowser.pinTab(n1); showS("pin n1 (context menu): its subtree follows:");
-gBrowser.unpinTab(p1); showS("unpin p1: p1 and p2 move to normal, together:");
+userInput(); gBrowser.pinTab(n1); showS("pin n1 (context menu): its subtree follows:");
+userInput(); gBrowser.unpinTab(p1); showS("unpin p1: p1 and p2 move to normal, together:");
 // Cross-section drag: m (normal) into the pinned tree, right under n1a, one level deeper than n1a.
 {
   const t = m; L.dragstart({ target: t, screenX: 100, composedPath: () => [t] });
@@ -186,3 +193,25 @@ for (const mode of ["sibling", "child", "end"]) {
   show(`ctrl+t on T1, mode=${mode}:`);
 }
 globalThis.NEWTAB = undefined; gBrowser.selectedTab = T; open("new-default", null); show("ctrl+t on T (root), default:");
+
+console.log("--- restart safety ---");
+{
+  tabs.length = 0; groups.length = 0;
+  const A2 = new Tab("A2"); tabs.push(A2); L.TabOpen({ target: A2 });
+  const B2 = open("B2", A2, 1);
+  gBrowser.selectedTab = A2; const C3 = open("C3", null);
+  show("setup (C3 via Ctrl+T on A2):");
+  lastInputReset();                                   // no recent user input
+  move(B2, 2); show("Zen moves B2 below C3 by itself -> flat, parent kept:");
+  move(B2, 1); show("...Zen moves it back -> nested again:");
+
+  // "Undo close tab": Firefox creates the tab (TabOpen), then hands it its
+  // saved values in the same task. The saved id/parent must win, and the tab
+  // must not be moved to where a Ctrl+T tab would go.
+  gBrowser.selectedTab = C3;
+  const X = new Tab("X"); tabs.splice(2, 0, X);      // restored at its old index, under A2
+  globalThis.queueMicrotask = f => Promise.resolve().then(f);
+  L.TabOpen({ target: X }); store.set(X, { "ztt-id": "saved-x", "ztt-parent": A2.getAttribute("ztt-id") });
+  await null; await null; globalThis.queueMicrotask = f => f();
+  show(`undo-close X (saved under A2, while on C3), id=${X.getAttribute("ztt-id")}:`);
+}
